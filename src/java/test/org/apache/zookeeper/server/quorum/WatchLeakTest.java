@@ -43,17 +43,22 @@ import java.util.Random;
 
 import org.apache.jute.InputArchive;
 import org.apache.jute.OutputArchive;
+import org.apache.zookeeper.CreateMode;
 import org.apache.zookeeper.MockPacket;
+import org.apache.zookeeper.PortAssignment;
 import org.apache.zookeeper.ZooDefs;
+import org.apache.zookeeper.ZooKeeper;
 import org.apache.zookeeper.proto.ConnectRequest;
 import org.apache.zookeeper.proto.ReplyHeader;
 import org.apache.zookeeper.proto.RequestHeader;
 import org.apache.zookeeper.proto.SetWatches;
 import org.apache.zookeeper.server.MockNIOServerCnxn;
 import org.apache.zookeeper.server.NIOServerCnxnFactory;
+import org.apache.zookeeper.server.ServerCnxnFactory;
 import org.apache.zookeeper.server.ZKDatabase;
 import org.apache.zookeeper.server.ZooTrace;
 import org.apache.zookeeper.server.persistence.FileTxnSnapLog;
+import org.apache.zookeeper.test.ClientBase;
 import org.junit.Test;
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
@@ -63,13 +68,42 @@ import org.slf4j.LoggerFactory;
 /**
  * Demonstrate ZOOKEEPER-1382 : Watches leak on expired session
  */
-public class WatchLeakTest {
+public class WatchLeakTest extends ClientBase {
 
     protected static final Logger LOG = LoggerFactory
             .getLogger(WatchLeakTest.class);
 
     final long SESSION_ID = 0xBABEL;
 
+    public void setUp() throws Exception {
+        System.setProperty("zookeeper.admin.enableServer", "false");
+        System.setProperty(ServerCnxnFactory.ZOOKEEPER_SERVER_CNXN_FACTORY,
+                "org.apache.zookeeper.server.NettyServerCnxnFactory");
+
+        String host = "localhost";
+        int port = PortAssignment.unique();
+        hostPort = host + ":" + port;
+
+        serverFactory = ServerCnxnFactory.createFactory();
+        serverFactory.configure(new InetSocketAddress(host, port), maxCnxns);
+
+        super.setUp();
+    }
+
+    /**
+     * Ensure that NettyServerCnxn removes watches when client disconnects
+     */
+    @Test
+    public void testWatchLeakNetty() throws Exception {
+
+        ZooKeeper zk = createClient();
+        zk.create("/test", null, ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT);
+        assertEquals(0, ClientBase.getServer(serverFactory).getZKDatabase().getDataTree().getWatchCount());
+        assertNotNull(zk.exists("/test", true));
+        assertEquals(1, ClientBase.getServer(serverFactory).getZKDatabase().getDataTree().getWatchCount());
+        zk.close();
+        assertEquals(0, ClientBase.getServer(serverFactory).getZKDatabase().getDataTree().getWatchCount());
+    }
     /**
      * ZOOKEEPR-1382 test class
      */
