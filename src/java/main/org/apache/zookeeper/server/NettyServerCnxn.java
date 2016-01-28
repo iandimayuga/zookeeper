@@ -107,6 +107,9 @@ public class NettyServerCnxn extends ServerCnxn {
             }
         }
 
+        if (zkServer != null) {
+            zkServer.removeCnxn(this);
+        }
         if (channel.isOpen()) {
             channel.close();
         }

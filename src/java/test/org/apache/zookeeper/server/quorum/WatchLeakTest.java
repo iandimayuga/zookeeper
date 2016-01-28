@@ -44,14 +44,17 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Random;
+
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 import org.junit.runners.Parameterized.Parameters;
-
 import org.apache.jute.InputArchive;
 import org.apache.jute.OutputArchive;
+import org.apache.zookeeper.CreateMode;
 import org.apache.zookeeper.MockPacket;
+import org.apache.zookeeper.PortAssignment;
 import org.apache.zookeeper.ZooDefs;
+import org.apache.zookeeper.ZooKeeper;
 import org.apache.zookeeper.proto.ConnectRequest;
 import org.apache.zookeeper.proto.ReplyHeader;
 import org.apache.zookeeper.proto.RequestHeader;
@@ -60,9 +63,11 @@ import org.apache.zookeeper.server.MockNIOServerCnxn;
 import org.apache.zookeeper.server.NIOServerCnxn;
 import org.apache.zookeeper.server.NIOServerCnxnFactory;
 import org.apache.zookeeper.server.MockSelectorThread;
+import org.apache.zookeeper.server.ServerCnxnFactory;
 import org.apache.zookeeper.server.ZKDatabase;
 import org.apache.zookeeper.server.ZooTrace;
 import org.apache.zookeeper.server.persistence.FileTxnSnapLog;
+import org.apache.zookeeper.test.ClientBase;
 import org.apache.zookeeper.ZKParameterized;
 import org.junit.Before;
 import org.junit.Test;
@@ -76,7 +81,7 @@ import org.slf4j.LoggerFactory;
  */
 @RunWith(Parameterized.class)
 @Parameterized.UseParametersRunnerFactory(ZKParameterized.RunnerFactory.class)
-public class WatchLeakTest {
+public class WatchLeakTest extends ClientBase {
 
     protected static final Logger LOG = LoggerFactory
             .getLogger(WatchLeakTest.class);
@@ -86,8 +91,22 @@ public class WatchLeakTest {
     private final boolean sessionTimedout;
 
     @Before
-    public void setUp() {
+    public void setUp() throws Exception {
         System.setProperty("zookeeper.admin.enableServer", "false");
+        System.setProperty(ServerCnxnFactory.ZOOKEEPER_SERVER_CNXN_FACTORY,
+                "org.apache.zookeeper.server.NettyServerCnxnFactory");
+        System.setProperty(ZooKeeper.ZOOKEEPER_CLIENT_CNXN_SOCKET,
+                "org.apache.zookeeper.ClientCnxnSocketNetty");
+        System.setProperty(ZooKeeper.SECURE_CLIENT, "false");
+
+        String host = "localhost";
+        int port = PortAssignment.unique();
+        hostPort = host + ":" + port;
+
+        serverFactory = ServerCnxnFactory.createFactory();
+        serverFactory.configure(new InetSocketAddress(host, port), maxCnxns, false);
+
+        super.setUp();
     }
 
     public WatchLeakTest(boolean sessionTimedout) {
@@ -100,6 +119,22 @@ public class WatchLeakTest {
             { false }, { true },
         });
     }
+
+    /**
+     * Ensure that NettyServerCnxn removes watches when client disconnects
+     */
+    @Test
+    public void testWatchLeakNetty() throws Exception {
+
+        ZooKeeper zk = createClient();
+        zk.create("/test", null, ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT);
+        assertEquals(0, ClientBase.getServer(serverFactory).getZKDatabase().getDataTree().getWatchCount());
+        assertNotNull(zk.exists("/test", true));
+        assertEquals(1, ClientBase.getServer(serverFactory).getZKDatabase().getDataTree().getWatchCount());
+        zk.close();
+        assertEquals(0, ClientBase.getServer(serverFactory).getZKDatabase().getDataTree().getWatchCount());
+    }
+
 
     /**
      * Check that if session has expired then no watch can be set
